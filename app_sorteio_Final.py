@@ -40,7 +40,8 @@ if "df_avaliadores" not in st.session_state:
 # -------------------------------
 # Caminho para logo
 # -------------------------------
-caminho_logo = "logo-escolai.png"
+caminho_logo = os.path.join(os.path.dirname(__file__), "logo-escolai.png")
+caminho_logo = pathlib.Path(caminho_logo).resolve().as_posix()
 
 # ============================================================
 # BLOCO 2: CSS / DESIGN
@@ -926,12 +927,11 @@ elif st.session_state["page"] == "home":
         try:
             uploaded_file = st.session_state["uploaded_file"]
 
-            # Carrega arquivo em memória temporário
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                tmp.write(uploaded_file.getvalue())
-                tmp_path = tmp.name
-            
-            xls = pd.ExcelFile(tmp_path)
+            # Carrega arquivo em memória
+            bytes_data = uploaded_file.getvalue()
+            excel_buffer = io.BytesIO(bytes_data)
+            xls = pd.ExcelFile(excel_buffer)
+
             sheet_names = set(xls.sheet_names)
 
             # --------------------------------------------------------
@@ -1011,7 +1011,7 @@ elif st.session_state["page"] == "home":
             # Aba Avaliadores
             if "Avaliadores" in sheet_names:
                 df_avaliadores = pd.read_excel(
-                    tmp_path, sheet_name="Avaliadores"
+                    excel_buffer, sheet_name="Avaliadores"
                 ).fillna("")
                 st.session_state["df_avaliadores"] = df_avaliadores
                 with abas[0]:
@@ -1020,7 +1020,10 @@ elif st.session_state["page"] == "home":
 
             # Aba Escolas
             if "Escolas" in sheet_names:
-                df_escolas = pd.read_excel(tmp_path, sheet_name="Escolas").fillna("")
+                excel_buffer.seek(0)
+                df_escolas = pd.read_excel(excel_buffer, sheet_name="Escolas").fillna(
+                    ""
+                )
                 st.session_state["df_escolas"] = df_escolas
                 with abas[1]:
                     st.subheader("📘 Escolas")
@@ -1030,114 +1033,106 @@ elif st.session_state["page"] == "home":
             st.error(f"❌ Erro ao processar arquivo: {e}")
 
         # ------------------------------------------------------------
-        # SUB-BLOCO 10.3: BOTÕES DE AÇÃO (VERSÃO FINAL ESTÁVEL)
-        # ------------------------------------------------------------
-        c1, c2, c3, c4, c5 = st.columns([0.5, 1, 1, 1, 0.5], gap="small")
+# SUB-BLOCO 10.3: BOTÕES DE AÇÃO (VERSÃO FINAL ESTÁVEL)
+# ------------------------------------------------------------
+c1, c2, c3, c4, c5 = st.columns([0.5, 1, 1, 1, 0.5], gap="small")
 
-        # ----------------------------
-        # BOTÃO LIMPAR
-        # ----------------------------
-        with c2:
-            if st.button("🗑 Limpar", key="btn_limpar_home"):
-                # Limpa apenas o conteúdo, sem recriar o DataFrame
-                if "param_dist_df" in st.session_state:
-                    df = st.session_state["param_dist_df"]
-                    if "Valor" in df.columns:
-                        df["Valor"] = ""
-                    if "Utilizar este Critério" in df.columns:
-                        df["Utilizar este Critério"] = False
+# ----------------------------
+# BOTÃO LIMPAR
+# ----------------------------
+with c2:
+    if st.button("🗑 Limpar", key="btn_limpar_home"):
+        # Limpa apenas o conteúdo, sem recriar o DataFrame
+        if "param_dist_df" in st.session_state:
+            df = st.session_state["param_dist_df"]
+            if "Valor" in df.columns:
+                df["Valor"] = ""
+            if "Utilizar este Critério" in df.columns:
+                df["Utilizar este Critério"] = False
 
-                # Remove resultados anteriores
-                if "last_result" in st.session_state:
-                    del st.session_state["last_result"]
+        # Remove resultados anteriores
+        if "last_result" in st.session_state:
+            del st.session_state["last_result"]
 
-                st.rerun()
+        st.rerun()
 
-        # --------------------------------------------------------
-        # BOTÃO ALEATÓRIO
-        # --------------------------------------------------------
-        with c3:
-            if st.button("🎲 Aleatório", key="btn_aleatorio_home"):
-                df_escolas = st.session_state.get("df_escolas")
-                df_avaliadores = st.session_state.get("df_avaliadores")
+# --------------------------------------------------------
+# BOTÃO ALEATÓRIO
+# --------------------------------------------------------
+with c3:
+    if st.button("🎲 Aleatório", key="btn_aleatorio_home"):
+        df_escolas = st.session_state.get("df_escolas")
+        df_avaliadores = st.session_state.get("df_avaliadores")
 
-                if df_escolas is not None and df_avaliadores is not None:
-                    # ✅ Agora lê o DataFrame persistido (não o editor)
-                    params_raw = st.session_state.get("param_dist_df", pd.DataFrame())
+        if df_escolas is not None and df_avaliadores is not None:
+            # ✅ Agora lê o DataFrame persistido (não o editor)
+            params_raw = st.session_state.get("param_dist_df", pd.DataFrame())
 
-                    params = _normalize_editor_df(
-                        params_raw.copy(),
-                        checkbox_col="Utilizar este Critério",
-                        numeric_cols=["Valor"],
-                    )
+            params = _normalize_editor_df(
+                params_raw.copy(),
+                checkbox_col="Utilizar este Critério",
+                numeric_cols=["Valor"],
+            )
 
-                    tem_parametros_validos = any(
-                        row.get("Utilizar este Critério") and row.get("Valor_num", 0) > 0
-                        for _, row in params.iterrows()
-                    )
+            tem_parametros_validos = any(
+                row.get("Utilizar este Critério") and row.get("Valor_num", 0) > 0
+                for _, row in params.iterrows()
+            )
 
-                    if tem_parametros_validos:
-                        dct = {
-                            r["Parametro"]: r.get("Valor_num", None)
-                            for _, r in params.iterrows()
-                            if r.get("Utilizar este Critério")
-                        }
-                        ape = int(dct.get("Avaliadores_por_escola", 1))
-                        epa = int(dct.get("Escolas_por_avaliador", 999))
-                        executar_sorteio(df_escolas, df_avaliadores, params.copy(), ape, epa)
-                    else:
-                        executar_sorteio(
-                            df_escolas,
-                            df_avaliadores,
-                            criar_parametros_aleatorios(),
-                            1,
-                            999,
-                        )
-                else:
-                    st.error("⚠️ Arquivo Excel inválido ou incompleto.")
-
-        # --------------------------------------------------------
-        # BOTÃO GERAR/REPETIR
-        # --------------------------------------------------------
-        with c4:
-            if st.button("🔄 Gerar/Repetir", key="btn_repetir_home"):
-                # ✅ Usa o DataFrame persistido
-                params_raw = st.session_state.get("param_dist_df", pd.DataFrame())
-
-                params = _normalize_editor_df(
-                    params_raw.copy(),
-                    checkbox_col="Utilizar este Critério",
-                    numeric_cols=["Valor"],
+            if tem_parametros_validos:
+                dct = {
+                    r["Parametro"]: r.get("Valor_num", None)
+                    for _, r in params.iterrows()
+                    if r.get("Utilizar este Critério")
+                }
+                ape = int(dct.get("Avaliadores_por_escola", 1))
+                epa = int(dct.get("Escolas_por_avaliador", 999))
+                executar_sorteio(df_escolas, df_avaliadores, params.copy(), ape, epa)
+            else:
+                executar_sorteio(
+                    df_escolas,
+                    df_avaliadores,
+                    criar_parametros_aleatorios(),
+                    1,
+                    999,
                 )
+        else:
+            st.error("⚠️ Arquivo Excel inválido ou incompleto.")
 
-                if not params.empty:
-                    dct = {
-                        r["Parametro"]: r.get("Valor_num", None) for _, r in params.iterrows()
-                    }
-                    raw_ape = dct.get("Avaliadores_por_escola", None)
-                    raw_epa = dct.get("Escolas_por_avaliador", None)
+# --------------------------------------------------------
+# BOTÃO GERAR/REPETIR
+# --------------------------------------------------------
+with c4:
+    if st.button("🔄 Gerar/Repetir", key="btn_repetir_home"):
+        # ✅ Usa o DataFrame persistido
+        params_raw = st.session_state.get("param_dist_df", pd.DataFrame())
 
-                    if raw_ape is None or pd.isna(raw_ape) or raw_ape <= 0:
-                        st.error("⚠️ Informe um valor válido para Avaliadores_por_escola.")
-                    elif raw_epa is None or pd.isna(raw_epa) or raw_epa <= 0:
-                        st.error("⚠️ Informe um valor válido para Escolas_por_avaliador.")
-                    else:
-                        avaliadores_por_escola = int(raw_ape)
-                        escolas_por_avaliador = int(raw_epa)
-                        executar_sorteio(
-                            st.session_state.get("df_escolas"),
-                            st.session_state.get("df_avaliadores"),
-                            params,
-                            avaliadores_por_escola,
-                            escolas_por_avaliador,
-                        )
-                else:
-                    st.error("⚠️ Configure os parâmetros antes de gerar o sorteio.")
+        params = _normalize_editor_df(
+            params_raw.copy(),
+            checkbox_col="Utilizar este Critério",
+            numeric_cols=["Valor"],
+        )
 
-        # --------------------------------------------------------
-        # FIM DO ARQUIVO PRINCIPAL
-        # --------------------------------------------------------
+        if not params.empty:
+            dct = {
+                r["Parametro"]: r.get("Valor_num", None) for _, r in params.iterrows()
+            }
+            raw_ape = dct.get("Avaliadores_por_escola", None)
+            raw_epa = dct.get("Escolas_por_avaliador", None)
 
-        # ❌ Removidos blocos antigos de execução automática (__main__)
-        # ✅ O app agora é iniciado apenas pelo launcher_sorteio_final.py,
-        # evitando loops infinitos e múltiplas abas de navegador.
+            if raw_ape is None or pd.isna(raw_ape) or raw_ape <= 0:
+                st.error("⚠️ Informe um valor válido para Avaliadores_por_escola.")
+            elif raw_epa is None or pd.isna(raw_epa) or raw_epa <= 0:
+                st.error("⚠️ Informe um valor válido para Escolas_por_avaliador.")
+            else:
+                avaliadores_por_escola = int(raw_ape)
+                escolas_por_avaliador = int(raw_epa)
+                executar_sorteio(
+                    st.session_state.get("df_escolas"),
+                    st.session_state.get("df_avaliadores"),
+                    params,
+                    avaliadores_por_escola,
+                    escolas_por_avaliador,
+                )
+        else:
+            st.error("⚠️ Configure os parâmetros antes de gerar o sorteio.")
