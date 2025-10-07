@@ -904,42 +904,201 @@ if st.session_state["page"] == "result":
             else:
                 st.error("⚠️ Configure os parâmetros antes de gerar o sorteio.")
 
-    # ------------------------------------------------------------
-    # BOTÃO DE DOWNLOAD (reposicionado corretamente)
-    # ------------------------------------------------------------
-    with col5:
-        if not resultado.empty:
-            df_escola = aplicar_verificacao(resultado.copy(), "escola")
-            df_avaliador = aplicar_verificacao(resultado.copy(), "avaliador")
+        # ------------------------------------------------------------
+        # BOTÃO DE DOWNLOAD (reposicionado corretamente)
+        # ------------------------------------------------------------
+        with col5:
+            if not resultado.empty:
+                df_escola = aplicar_verificacao(resultado.copy(), "escola")
+                df_avaliador = aplicar_verificacao(resultado.copy(), "avaliador")
 
-            cols_aval = [
-                "ID_AVALIADOR",
-                "NOME_AVALIADOR",
-                "ESTADO_AVALIADOR",
-                "EMAIL_AVALIADOR",
-                "Escola",
-                "ID_ESCOLA",
-                "ESTADO_ESCOLA",
-                "Criterio_Utilizado",
-                "Alerta",
-            ]
-            cols_present = [c for c in cols_aval if c in df_avaliador.columns]
-            df_avaliador = df_avaliador[cols_present].sort_values(
-                by=[c for c in ["NOME_AVALIADOR", "Escola"] if c in cols_present]
-            )
+                cols_aval = [
+                    "ID_AVALIADOR",
+                    "NOME_AVALIADOR",
+                    "ESTADO_AVALIADOR",
+                    "EMAIL_AVALIADOR",
+                    "Escola",
+                    "ID_ESCOLA",
+                    "ESTADO_ESCOLA",
+                    "Criterio_Utilizado",
+                    "Alerta",
+                ]
+                cols_present = [c for c in cols_aval if c in df_avaliador.columns]
+                df_avaliador = df_avaliador[cols_present].sort_values(
+                    by=[c for c in ["NOME_AVALIADOR", "Escola"] if c in cols_present]
+                )
 
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                df_escola.to_excel(writer, sheet_name="Por Escola", index=False)
-                df_avaliador.to_excel(writer, sheet_name="Por Avaliador", index=False)
+                # ------------------------------------------------------------
+                # CRIAÇÃO DO ARQUIVO EXCEL FORMATADO COM LOG E TERCEIRA ABA
+                # ------------------------------------------------------------
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                    # 1️⃣ Aba: Resultado por Escola
+                    df_escola.to_excel(writer, sheet_name="Por Escola", index=False)
 
-            st.download_button(
-                label="📄 Baixar Excel",
-                data=buffer.getvalue(),
-                file_name="resultado_sorteio.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="btn_baixar_excel",
-            )
+                    # 2️⃣ Aba: Resultado por Avaliador
+                    df_avaliador.to_excel(
+                        writer, sheet_name="Por Avaliador", index=False
+                    )
+
+                    # 3️⃣ Aba: Resumo de Parâmetros e Log
+                    df_params = st.session_state.get(
+                        "param_dist_df", pd.DataFrame()
+                    ).copy()
+                    from datetime import datetime
+
+                    datahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+                    resumo = {
+                        "Campo": [
+                            "Tipo de Sorteio",
+                            "Tempo de Execução (s)",
+                            "Total Esperado",
+                            "Total Gerado",
+                            "Capacidade",
+                            "Data/Hora da Geração",
+                        ],
+                        "Valor": [
+                            (
+                                "Aleatório"
+                                if (
+                                    data.get("avaliadores_por_escola", 0) == 1
+                                    and data.get("escolas_por_avaliador", 0) >= 999
+                                )
+                                else "Parametrizado"
+                            ),
+                            f"{data.get('tempo_exec', 0):.2f}",
+                            data.get("total_esperado", 0),
+                            data.get("total_real", 0),
+                            int(data.get("capacidade", 0)),
+                            datahora,
+                        ],
+                    }
+                    df_resumo = pd.DataFrame(resumo)
+
+                    start_row = 2  # espaço para o título
+                    df_resumo.to_excel(
+                        writer,
+                        sheet_name="Resumo_Parametros",
+                        index=False,
+                        startrow=start_row,
+                    )
+
+                    if not df_params.empty:
+                        start_row = len(df_resumo) + 5
+                        df_params.to_excel(
+                            writer,
+                            sheet_name="Resumo_Parametros",
+                            index=False,
+                            startrow=start_row,
+                        )
+
+                # ------------------------------------------------------------
+                # APLICA FORMATAÇÃO VISUAL (openpyxl)
+                # ------------------------------------------------------------
+                from openpyxl import load_workbook
+                from openpyxl.utils import get_column_letter
+                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+                buffer.seek(0)
+                wb = load_workbook(buffer)
+
+                def format_sheet(ws):
+                    """Aplica cabeçalho formatado, autoajuste e filtro."""
+                    header_fill = PatternFill(
+                        start_color="DDDDDD", end_color="DDDDDD", fill_type="solid"
+                    )
+                    thin_border = Border(
+                        left=Side(style="thin", color="AAAAAA"),
+                        right=Side(style="thin", color="AAAAAA"),
+                        top=Side(style="thin", color="AAAAAA"),
+                        bottom=Side(style="thin", color="AAAAAA"),
+                    )
+
+                    # Cabeçalho
+                    for cell in ws[1]:
+                        cell.font = Font(bold=True, color="000000")
+                        cell.fill = header_fill
+                        cell.alignment = Alignment(
+                            horizontal="center", vertical="center"
+                        )
+                        cell.border = thin_border
+
+                    # Autoajuste de largura + bordas
+                    for col in ws.columns:
+                        max_len = 0
+                        col_letter = get_column_letter(col[0].column)
+                        for cell in col:
+                            if cell.value:
+                                max_len = max(max_len, len(str(cell.value)))
+                            cell.border = thin_border
+                        ws.column_dimensions[col_letter].width = max_len + 2
+
+                    ws.auto_filter.ref = ws.dimensions
+
+                # aplica formatação em todas as abas
+                for name in wb.sheetnames:
+                    ws = wb[name]
+                    format_sheet(ws)
+
+                # ------------------------------------------------------------
+                # FORMATAÇÃO EXCLUSIVA PARA ABA DE RESUMO
+                # ------------------------------------------------------------
+                ws_resumo = wb["Resumo_Parametros"]
+                lilas = "D9C2E9"  # lilás institucional Escolaí
+
+                # Inserir título grande no topo
+                ws_resumo.insert_rows(1)
+                ws_resumo["A1"] = (
+                    "Relatório de Distribuição de Avaliadores – Programa Escolaí"
+                )
+                ws_resumo.merge_cells(
+                    start_row=1, start_column=1, end_row=1, end_column=4
+                )
+                ws_resumo["A1"].font = Font(
+                    size=15, bold=True, color="4B0082"
+                )  # lilás escuro
+                ws_resumo["A1"].alignment = Alignment(
+                    horizontal="center", vertical="center"
+                )
+                ws_resumo["A1"].fill = PatternFill(
+                    start_color=lilas, end_color=lilas, fill_type="solid"
+                )
+                ws_resumo.row_dimensions[1].height = 28
+
+                # Adiciona borda e ajuste visual
+                for cell in ws_resumo[2]:
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill(
+                        start_color="EAEAEA", end_color="EAEAEA", fill_type="solid"
+                    )
+                    cell.alignment = Alignment(horizontal="center")
+
+                # Autoajuste novamente após título
+                for col in ws_resumo.columns:
+                    max_len = 0
+                    col_letter = get_column_letter(col[0].column)
+                    for cell in col:
+                        if cell.value:
+                            max_len = max(max_len, len(str(cell.value)))
+                    ws_resumo.column_dimensions[col_letter].width = max_len + 2
+
+                # ------------------------------------------------------------
+                # SALVA E DISPONIBILIZA PARA DOWNLOAD
+                # ------------------------------------------------------------
+                buffer2 = io.BytesIO()
+                wb.save(buffer2)
+                buffer2.seek(0)
+
+                from datetime import datetime
+
+                st.download_button(
+                    label="📄 Baixar Excel Formatado",
+                    data=buffer2.getvalue(),
+                    file_name=f"resultado_sorteio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="btn_baixar_excel_formatado",
+                )
 
     # ------------------------------------------------------------
     # TABELAS DE RESULTADOS
