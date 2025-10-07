@@ -1093,11 +1093,11 @@ if st.session_state["page"] == "result":
                 from datetime import datetime
 
                 st.download_button(
-                    label="📄 Baixar Excel Formatado",
+                    label="📄 Baixar Excel",
                     data=buffer2.getvalue(),
                     file_name=f"resultado_sorteio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="btn_baixar_excel_formatado",
+                    key="btn_baixar_excel",
                 )
 
     # ------------------------------------------------------------
