@@ -37,6 +37,9 @@ if "df_escolas" not in st.session_state:
 if "df_avaliadores" not in st.session_state:
     st.session_state["df_avaliadores"] = None
 
+if "modo_distribuicao" not in st.session_state:
+    st.session_state["modo_distribuicao"] = "diversidade"  # valores: "diversidade" ou "mesmo_estado"
+
 # -------------------------------
 # Caminho para logo
 # -------------------------------
@@ -394,7 +397,47 @@ def _usados_na_escola(id_escola):
     }
 
 
-# 6.4) Seleção de candidatos
+# 6.4) Seleção de candidatos - NOVA LÓGICA: Priorizar Mesmo Estado
+def candidatos_mesmo_estado(
+    esc_row, df_avaliadores_param, escolas_por_avaliador_param
+):
+    """
+    Lógica alternativa: PRIORIZA avaliadores do mesmo estado da escola.
+    Quando não há mais disponíveis do mesmo estado, distribui aleatoriamente.
+    """
+    est_e = esc_row["ESTADO_ESCOLA"]
+    id_esc = esc_row["ID_ESCOLA"]
+    usados = _usados_na_escola(id_esc)
+
+    cand_mesmo_estado = []
+    cand_outros_estados = []
+
+    for _, av in df_avaliadores_param.iterrows():
+        ida = av["ID_AVALIADOR"]
+        if ida in usados:
+            continue
+
+        disponivel = escolas_por_avaliador_param - aloc_avaliador[ida]
+        if disponivel <= 0:
+            continue
+
+        est_a = av["ESTADO_AVALIADOR"]
+
+        # Separa em duas listas: mesmo estado vs outros estados
+        if est_a == est_e:
+            cand_mesmo_estado.append((10, "Mesmo_Estado_Prioritario", av))
+        else:
+            cand_outros_estados.append((1, "Outro_Estado_Aleatorio", av))
+
+    # Retorna primeiro os do mesmo estado, depois os outros
+    # Embaralha para dar aleatoriedade dentro de cada grupo
+    random.shuffle(cand_mesmo_estado)
+    random.shuffle(cand_outros_estados)
+    
+    return cand_mesmo_estado + cand_outros_estados
+
+
+# 6.5) Seleção de candidatos - LÓGICA ORIGINAL: Diversidade
 def candidatos_por_camada(
     esc_row, camada, df_avaliadores_param, escolas_por_avaliador_param
 ):
@@ -450,7 +493,7 @@ def candidatos_por_camada(
     return cand
 
 
-# 6.5) Função principal
+# 6.6) Função principal
 def sortear_avaliadores(df_escolas_in, df_avaliadores_in, dist_params):
     global aloc_escola, aloc_avaliador, escolas_estado_count, resultados_globais
 
@@ -516,13 +559,25 @@ def sortear_avaliadores(df_escolas_in, df_avaliadores_in, dist_params):
                 and tentativas < len(df_avaliadores_local) * 3
             ):
                 tentativas += 1
-                candidatos = []
-                for camada in [1, 2, 3]:
-                    candidatos = candidatos_por_camada(
-                        esc, camada, df_avaliadores_local, escolas_por_avaliador
+                
+                # ✅ NOVA LÓGICA: verifica qual modo usar
+                modo = st.session_state.get("modo_distribuicao", "diversidade")
+                
+                if modo == "mesmo_estado":
+                    # Usa a lógica de priorizar mesmo estado
+                    candidatos = candidatos_mesmo_estado(
+                        esc, df_avaliadores_local, escolas_por_avaliador
                     )
-                    if candidatos:
-                        break
+                else:
+                    # Usa a lógica original de diversidade (camadas 1, 2, 3)
+                    candidatos = []
+                    for camada in [1, 2, 3]:
+                        candidatos = candidatos_por_camada(
+                            esc, camada, df_avaliadores_local, escolas_por_avaliador
+                        )
+                        if candidatos:
+                            break
+                
                 if not candidatos:
                     break
 
@@ -566,7 +621,7 @@ def sortear_avaliadores(df_escolas_in, df_avaliadores_in, dist_params):
     )
 
 
-# 6.6) Wrapper
+# 6.7) Wrapper
 def executar_sorteio(
     df_escolas, df_avaliadores, ed_dist, avaliadores_por_escola, escolas_por_avaliador
 ):
@@ -744,6 +799,29 @@ if st.session_state["page"] == "result":
         "param_dist_df" in st.session_state
         and not st.session_state["param_dist_df"].empty
     ):
+        # ✅ SELEÇÃO DO MODO DE DISTRIBUIÇÃO (TELA DE RESULTADOS)
+        st.markdown("### 🎯 Modo de Distribuição")
+        
+        modo_selecionado_result = st.radio(
+            "Escolha como distribuir os avaliadores:",
+            options=["diversidade", "mesmo_estado"],
+            format_func=lambda x: {
+                "diversidade": "🌍 Priorizar Diversidade (lógica original)",
+                "mesmo_estado": "🏠 Priorizar Mesmo Estado (nova lógica)"
+            }[x],
+            index=0 if st.session_state.get("modo_distribuicao", "diversidade") == "diversidade" else 1,
+            key="radio_modo_distribuicao_result",
+            help=(
+                "**Priorizar Diversidade:** Tenta distribuir avaliadores de estados diferentes.\n\n"
+                "**Priorizar Mesmo Estado:** Prioriza avaliadores do mesmo estado da escola primeiro. "
+                "Quando não há mais disponíveis, distribui aleatoriamente."
+            )
+        )
+        
+        st.session_state["modo_distribuicao"] = modo_selecionado_result
+        
+        st.markdown("---")
+        
         st.markdown("### ⚙️ Parâmetros de Distribuição (ajuste se desejar)")
 
         # visão sem coluna técnica
@@ -1205,6 +1283,31 @@ elif st.session_state["page"] == "home":
             # --------------------------------------------------------
             # SUB-BLOCO 10.2.1 – EDITOR DE PARÂMETROS (ANTI-PISCAR)
             # --------------------------------------------------------
+            
+            # ✅ SELEÇÃO DO MODO DE DISTRIBUIÇÃO
+            st.markdown("### 🎯 Modo de Distribuição")
+            
+            modo_selecionado = st.radio(
+                "Escolha como distribuir os avaliadores:",
+                options=["diversidade", "mesmo_estado"],
+                format_func=lambda x: {
+                    "diversidade": "🌍 Priorizar Diversidade (lógica original)",
+                    "mesmo_estado": "🏠 Priorizar Mesmo Estado (nova lógica)"
+                }[x],
+                index=0 if st.session_state.get("modo_distribuicao", "diversidade") == "diversidade" else 1,
+                key="radio_modo_distribuicao",
+                help=(
+                    "**Priorizar Diversidade:** Tenta distribuir avaliadores de estados diferentes.\n\n"
+                    "**Priorizar Mesmo Estado:** Prioriza avaliadores do mesmo estado da escola primeiro. "
+                    "Quando não há mais disponíveis, distribui aleatoriamente."
+                )
+            )
+            
+            # Atualiza o session_state
+            st.session_state["modo_distribuicao"] = modo_selecionado
+            
+            st.markdown("---")  # Linha separadora
+            
             st.markdown("### ⚙️ Parâmetros de Distribuição")
 
             if (
