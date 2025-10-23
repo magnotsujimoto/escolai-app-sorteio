@@ -607,8 +607,12 @@ def sortear_avaliadores(df_escolas_in, df_avaliadores_in, dist_params):
         for _, row in dist_params.iterrows()
         if row.get("Utilizar este Critério")
     }
-    avaliadores_por_escola = dist_dict.get("Avaliadores_por_escola", 0)
-    escolas_por_avaliador = dist_dict.get("Escolas_por_avaliador", 0)
+    
+    # ✅ CORREÇÃO: Usa valores padrão se não marcado
+    # Se Avaliadores_por_escola não está no dict (não marcado), usa 1
+    # Se Escolas_por_avaliador não está no dict (não marcado), usa 999 (sem limite)
+    avaliadores_por_escola = dist_dict.get("Avaliadores_por_escola", 1)
+    escolas_por_avaliador = dist_dict.get("Escolas_por_avaliador", 999)
 
     # ✅ Usa a pré-checagem correta conforme o modo selecionado
     modo = st.session_state.get("modo_distribuicao", "diversidade")
