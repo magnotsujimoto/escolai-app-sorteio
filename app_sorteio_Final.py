@@ -316,7 +316,7 @@ def criar_parametros_aleatorios():
 # ============================================================
 
 
-# 6.1) Pré-checagem
+# 6.1) Pré-checagem - MODO DIVERSIDADE (Original)
 def pre_check_sorteio(
     df_escolas, df_avaliadores, avaliadores_por_escola, escolas_por_avaliador
 ):
@@ -379,6 +379,83 @@ def pre_check_sorteio(
             msgs_avisos.append(
                 f"⚠️ Estado {estado}: demanda {demanda_estado}, capacidade disponível {capacidade_local + capacidade_externa_total}"
             )
+
+    return (True, msgs_criticas, msgs_avisos, capacidade)
+
+
+# 6.1b) Pré-checagem - MODO MESMO ESTADO (Nova lógica)
+def pre_check_sorteio_mesmo_estado(
+    df_escolas, df_avaliadores, avaliadores_por_escola, escolas_por_avaliador
+):
+    """
+    Verifica viabilidade priorizando avaliadores do mesmo estado.
+    Gera avisos APENAS para inconsistências CRÍTICAS que impedem a distribuição.
+    Caso contrário, retorna vazio (sem avisos).
+    """
+    msgs_criticas, msgs_avisos = [], []
+
+    if df_escolas is None or df_escolas.empty:
+        return (True, ["Planilha de Escolas vazia ou inválida"], [], 0)
+    if df_avaliadores is None or df_avaliadores.empty:
+        return (True, ["Planilha de Avaliadores vazia ou inválida"], [], 0)
+
+    colunas_escolas = ["ID_ESCOLA", "ESCOLA", "ESTADO_ESCOLA"]
+    colunas_avaliadores = [
+        "ID_AVALIADOR",
+        "NOME_AVALIADOR",
+        "ESTADO_AVALIADOR",
+        "CIDADE_AVALIADOR",
+        "EMAIL_AVALIADOR",
+    ]
+
+    faltando_e = [c for c in colunas_escolas if c not in df_escolas.columns]
+    faltando_a = [c for c in colunas_avaliadores if c not in df_avaliadores.columns]
+    if faltando_e:
+        return (True, [f"Colunas faltando em Escolas: {', '.join(faltando_e)}"], [], 0)
+    if faltando_a:
+        return (
+            True,
+            [f"Colunas faltando em Avaliadores: {', '.join(faltando_a)}"],
+            [],
+            0,
+        )
+
+    total_escolas = len(df_escolas)
+    total_avaliadores = len(df_avaliadores)
+
+    if avaliadores_por_escola <= 0:
+        return (True, ["Parâmetro Avaliadores_por_escola deve ser > 0"], [], 0)
+
+    # Capacidade total (considerando que pode usar qualquer avaliador)
+    capacidade = total_avaliadores * max(1, escolas_por_avaliador)
+    demanda = total_escolas * max(1, avaliadores_por_escola)
+    
+    # ✅ CRÍTICO: Só avisa se capacidade TOTAL for insuficiente
+    if capacidade < demanda:
+        msgs_avisos.append(
+            f"⚠️ Capacidade total insuficiente: {capacidade} slots disponíveis < {demanda} necessários"
+        )
+
+    escolas_estado = df_escolas["ESTADO_ESCOLA"].value_counts().to_dict()
+    
+    if not escolas_estado:
+        return (True, ["Nenhum estado válido encontrado"], [], 0)
+
+    # ✅ Verifica apenas se algum estado NÃO pode ser atendido de jeito nenhum
+    for estado, qtd_escolas in escolas_estado.items():
+        demanda_estado = qtd_escolas * avaliadores_por_escola
+        
+        # Total de avaliadores disponíveis para este estado
+        capacidade_total_para_estado = total_avaliadores * escolas_por_avaliador
+        
+        # ✅ CRÍTICO: Só avisa se IMPOSSÍVEL atender (nem com todos os avaliadores)
+        if capacidade_total_para_estado < demanda_estado:
+            msgs_avisos.append(
+                f"⚠️ Estado {estado}: impossível atender demanda {demanda_estado} com capacidade disponível {capacidade_total_para_estado}"
+            )
+    
+    # ✅ Não gera avisos informativos sobre % de cobertura local
+    # Cards ficam em branco quando não há problemas críticos
 
     return (True, msgs_criticas, msgs_avisos, capacidade)
 
@@ -533,12 +610,23 @@ def sortear_avaliadores(df_escolas_in, df_avaliadores_in, dist_params):
     avaliadores_por_escola = dist_dict.get("Avaliadores_por_escola", 0)
     escolas_por_avaliador = dist_dict.get("Escolas_por_avaliador", 0)
 
-    _, msgs_criticas, msgs_avisos, capacidade = pre_check_sorteio(
-        df_escolas_local,
-        df_avaliadores_local,
-        avaliadores_por_escola,
-        escolas_por_avaliador,
-    )
+    # ✅ Usa a pré-checagem correta conforme o modo selecionado
+    modo = st.session_state.get("modo_distribuicao", "diversidade")
+    
+    if modo == "mesmo_estado":
+        _, msgs_criticas, msgs_avisos, capacidade = pre_check_sorteio_mesmo_estado(
+            df_escolas_local,
+            df_avaliadores_local,
+            avaliadores_por_escola,
+            escolas_por_avaliador,
+        )
+    else:
+        _, msgs_criticas, msgs_avisos, capacidade = pre_check_sorteio(
+            df_escolas_local,
+            df_avaliadores_local,
+            avaliadores_por_escola,
+            escolas_por_avaliador,
+        )
 
     total_esperado = len(df_escolas_local) * max(1, avaliadores_por_escola)
     resultados_globais = []
@@ -893,34 +981,56 @@ if st.session_state["page"] == "result":
 
     with col_b:
         avisos = data.get("avisos", [])
-        if avisos:
-            avisos_html = "<br>".join([f"• {av}" for av in avisos])
-            st.markdown(
-                f"""<div class="warning-box" style="margin-bottom:12px; height:auto;">
-                <h4 style="margin-top:0; font-size:14px;">⚠️ Avisos</h4>
-                <div style="font-size:13px; line-height:1.5;">{avisos_html}</div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
+        modo_atual = st.session_state.get("modo_distribuicao", "diversidade")
+        
+        # ✅ MODO DIVERSIDADE: Mostra avisos e observações
+        if modo_atual == "diversidade":
+            if avisos:
+                avisos_html = "<br>".join([f"• {av}" for av in avisos])
+                st.markdown(
+                    f"""<div class="warning-box" style="margin-bottom:12px; height:auto;">
+                    <h4 style="margin-top:0; font-size:14px;">⚠️ Avisos</h4>
+                    <div style="font-size:13px; line-height:1.5;">{avisos_html}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
 
-        df_escola_check = verificacao_por_escola(resultado.copy())
-        criticos_total = (df_escola_check["Alerta"].str.contains("⚠️", na=False)).sum()
+            df_escola_check = verificacao_por_escola(resultado.copy())
+            criticos_total = (df_escola_check["Alerta"].str.contains("⚠️", na=False)).sum()
 
-        if criticos_total > 0:
-            st.markdown(
-                f"""<div class="error-box" style="height:auto;">
-                <h4 style="margin-top:0; font-size:14px;">❌ Observações</h4>
-                <div style="font-size:13px;">{criticos_total} casos com baixa diversidade</div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-        elif not avisos and criticos_total == 0:
-            st.markdown(
-                """<div class="resumo-box" style="height:200px; text-align:center; display:flex; align-items:center; justify-content:center;">
-                <div style="font-size:16px;">✅ Nenhuma observação detectada</div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
+            if criticos_total > 0:
+                st.markdown(
+                    f"""<div class="error-box" style="height:auto;">
+                    <h4 style="margin-top:0; font-size:14px;">❌ Observações</h4>
+                    <div style="font-size:13px;">{criticos_total} casos com baixa diversidade</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+            elif not avisos:
+                st.markdown(
+                    """<div class="resumo-box" style="height:200px; text-align:center; display:flex; align-items:center; justify-content:center;">
+                    <div style="font-size:16px;">✅ Nenhuma observação detectada</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+        
+        # ✅ MODO MESMO ESTADO: Cards em branco (apenas erros críticos)
+        elif modo_atual == "mesmo_estado":
+            # Só mostra avisos se houver erros CRÍTICOS (não informativos)
+            if avisos:
+                # Filtra apenas avisos críticos (capacidade insuficiente, erros de dados)
+                avisos_criticos = [av for av in avisos if "⚠️ Capacidade total insuficiente" in av or "❌" in av]
+                
+                if avisos_criticos:
+                    avisos_html = "<br>".join([f"• {av}" for av in avisos_criticos])
+                    st.markdown(
+                        f"""<div class="warning-box" style="margin-bottom:12px; height:auto;">
+                        <h4 style="margin-top:0; font-size:14px;">⚠️ Avisos</h4>
+                        <div style="font-size:13px; line-height:1.5;">{avisos_html}</div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+            # Caso contrário: card fica em branco (sem exibir nada)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ------------------------------------------------------------
@@ -957,21 +1067,40 @@ if st.session_state["page"] == "result":
             )
 
             if not params.empty:
+                # ✅ CORREÇÃO: Pega apenas parâmetros MARCADOS
                 dct = {
                     r["Parametro"]: r.get("Valor_num", None)
                     for _, r in params.iterrows()
-                    if r.get("Utilizar este Critério")
+                    if r.get("Utilizar este Critério")  # Só pega os marcados
                 }
-                raw_ape = dct.get("Avaliadores_por_escola", None)
-                raw_epa = dct.get("Escolas_por_avaliador", None)
-
-                if raw_ape is None or pd.isna(raw_ape) or raw_ape <= 0:
-                    st.error("⚠️ Informe um valor válido para Avaliadores_por_escola.")
-                elif raw_epa is None or pd.isna(raw_epa) or raw_epa <= 0:
-                    st.error("⚠️ Informe um valor válido para Escolas_por_avaliador.")
+                
+                # Verifica se pelo menos 1 parâmetro está marcado e válido
+                tem_algum_valido = any(
+                    r.get("Utilizar este Critério") and r.get("Valor_num", 0) > 0
+                    for _, r in params.iterrows()
+                )
+                
+                if not tem_algum_valido:
+                    st.error(
+                        "⚠️ Marque e preencha pelo menos um dos parâmetros."
+                    )
                 else:
-                    avaliadores_por_escola = int(raw_ape)
-                    escolas_por_avaliador = int(raw_epa)
+                    # Define valores padrão para parâmetros não marcados
+                    raw_ape = dct.get("Avaliadores_por_escola", None)
+                    raw_epa = dct.get("Escolas_por_avaliador", None)
+                    
+                    # Se não marcou Avaliadores_por_escola, usa 1 (padrão)
+                    if raw_ape is None or pd.isna(raw_ape):
+                        avaliadores_por_escola = 1
+                    else:
+                        avaliadores_por_escola = int(raw_ape)
+                    
+                    # Se não marcou Escolas_por_avaliador, usa 999 (sem limite)
+                    if raw_epa is None or pd.isna(raw_epa):
+                        escolas_por_avaliador = 999
+                    else:
+                        escolas_por_avaliador = int(raw_epa)
+                    
                     executar_sorteio(
                         st.session_state.get("df_escolas"),
                         st.session_state.get("df_avaliadores"),
@@ -1496,24 +1625,40 @@ elif st.session_state["page"] == "home":
                 )
 
                 if not params.empty:
+                    # ✅ CORREÇÃO: Pega apenas parâmetros MARCADOS
                     dct = {
                         r["Parametro"]: r.get("Valor_num", None)
                         for _, r in params.iterrows()
+                        if r.get("Utilizar este Critério")  # Só pega os marcados
                     }
-                    raw_ape = dct.get("Avaliadores_por_escola", None)
-                    raw_epa = dct.get("Escolas_por_avaliador", None)
-
-                    if raw_ape is None or pd.isna(raw_ape) or raw_ape <= 0:
+                    
+                    # Verifica se pelo menos 1 parâmetro está marcado e válido
+                    tem_algum_valido = any(
+                        r.get("Utilizar este Critério") and r.get("Valor_num", 0) > 0
+                        for _, r in params.iterrows()
+                    )
+                    
+                    if not tem_algum_valido:
                         st.error(
-                            "⚠️ Informe um valor válido para Avaliadores_por_escola."
-                        )
-                    elif raw_epa is None or pd.isna(raw_epa) or raw_epa <= 0:
-                        st.error(
-                            "⚠️ Informe um valor válido para Escolas_por_avaliador."
+                            "⚠️ Marque e preencha pelo menos um dos parâmetros."
                         )
                     else:
-                        avaliadores_por_escola = int(raw_ape)
-                        escolas_por_avaliador = int(raw_epa)
+                        # Define valores padrão para parâmetros não marcados
+                        raw_ape = dct.get("Avaliadores_por_escola", None)
+                        raw_epa = dct.get("Escolas_por_avaliador", None)
+                        
+                        # Se não marcou Avaliadores_por_escola, usa 1 (padrão)
+                        if raw_ape is None or pd.isna(raw_ape):
+                            avaliadores_por_escola = 1
+                        else:
+                            avaliadores_por_escola = int(raw_ape)
+                        
+                        # Se não marcou Escolas_por_avaliador, usa 999 (sem limite)
+                        if raw_epa is None or pd.isna(raw_epa):
+                            escolas_por_avaliador = 999
+                        else:
+                            escolas_por_avaliador = int(raw_epa)
+                        
                         executar_sorteio(
                             st.session_state.get("df_escolas"),
                             st.session_state.get("df_avaliadores"),
